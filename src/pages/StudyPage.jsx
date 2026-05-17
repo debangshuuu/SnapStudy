@@ -1,93 +1,80 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiClock, FiCheckCircle, FiChevronRight, FiRotateCcw, FiZap, FiSearch } from 'react-icons/fi';
+import { useLocation, Link } from 'react-router-dom';
+import { FiChevronRight, FiRotateCcw, FiZap, FiSearch, FiPlay, FiLock, FiUnlock, FiArrowLeft, FiBookOpen } from 'react-icons/fi';
+import ReactMarkdown from 'react-markdown';
 import { topics } from '../data/topics';
 import { useDebounce } from '../hooks/useDebounce';
 import { useThrottle } from '../hooks/useThrottle';
+import { useMastery } from '../hooks/useMastery';
+import { generateQuiz, generateStudyNotes } from '../services/aiService';
 import SEO from '../components/seo/SEO';
 import './StudyPage.css';
 
-/* ── Helpers ─────────────────────────────────── */
-
-/** Very simple inline-markdown renderer for **bold** text */
-function renderBody(text) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) =>
-    part.startsWith('**') ? (
-      <strong key={i}>{part.slice(2, -2)}</strong>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
-}
-
-/** Detect markdown-style table and render it as <table> */
-function renderNoteBody(body) {
-  if (body.includes('|---|')) {
-    const rows = body.trim().split('\n').filter(Boolean);
-    const headers = rows[0].split('|').filter(Boolean).map(h => h.trim());
-    const dataRows = rows.slice(2).map(r =>
-      r.split('|').filter(Boolean).map(c => c.trim())
-    );
-    return (
-      <div className="note-table-wrap">
-        <table className="note-table">
-          <thead>
-            <tr>{headers.map(h => <th key={h}>{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {dataRows.map((row, ri) => (
-              <tr key={ri}>
-                {row.map((cell, ci) => (
-                  <td key={ci}>{renderBody(cell)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-  return <p className="note-body">{renderBody(body)}</p>;
-}
-
 /* ── Sub-components ──────────────────────────── */
 
-function NoteCard({ note, onContinue, isLast }) {
+/* eslint-disable no-unused-vars */
+function MarkdownRenderer({ content }) {
   return (
-    <article className="glass-card note-card">
-      <h3>{note.heading}</h3>
-      {renderNoteBody(note.body)}
-      {note.highlight && (
-        <div className="note-highlight">{note.highlight}</div>
-      )}
-      {note.code && (
-        <div className="note-code">
-          <pre>{note.code.trim()}</pre>
-        </div>
-      )}
-      <div className="note-continue-btn">
-        <button className="btn btn-primary" onClick={onContinue} id={`continue-${note.id}`}>
-          {isLast ? 'Go to Practice Questions' : 'Next Section'} <FiChevronRight />
-        </button>
-      </div>
-    </article>
+    <div className="markdown-content">
+      <ReactMarkdown
+        components={{
+          h1: ({node, ...props}) => <h1 style={{marginTop: '2rem', marginBottom: '1rem', color: 'var(--color-primary-light)'}} {...props} />,
+          h2: ({node, ...props}) => <h2 style={{marginTop: '1.5rem', marginBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.5rem'}} {...props} />,
+          h3: ({node, ...props}) => <h3 style={{marginTop: '1.25rem', marginBottom: '0.5rem'}} {...props} />,
+          p: ({node, ...props}) => <p style={{marginBottom: '1rem', lineHeight: '1.7'}} {...props} />,
+          ul: ({node, ...props}) => <ul style={{marginBottom: '1rem', paddingLeft: '2rem', lineHeight: '1.7'}} {...props} />,
+          ol: ({node, ...props}) => <ol style={{marginBottom: '1rem', paddingLeft: '2rem', lineHeight: '1.7'}} {...props} />,
+          li: ({node, ...props}) => <li style={{marginBottom: '0.5rem'}} {...props} />,
+          code: ({node, inline, ...props}) => 
+            inline ? (
+              <code style={{background: 'rgba(255,255,255,0.1)', padding: '0.2rem 0.4rem', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.9em'}} {...props} />
+            ) : (
+              <pre style={{background: '#1a1b26', padding: '1rem', borderRadius: '8px', overflowX: 'auto', marginBottom: '1rem'}}>
+                <code style={{fontFamily: 'monospace', fontSize: '0.9em'}} {...props} />
+              </pre>
+            ),
+          blockquote: ({node, ...props}) => (
+            <blockquote style={{borderLeft: '4px solid var(--color-primary-light)', paddingLeft: '1rem', margin: '1rem 0', color: 'var(--text-muted)', fontStyle: 'italic'}} {...props} />
+          )
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 }
 
-function QuizSection({ questions, onComplete }) {
+function QuizSection({ topic, level, onComplete, onBack }) {
+  const [questions, setQuestions] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  
   const [current, setCurrent]     = useState(0);
   const [selected, setSelected]   = useState(null);
   const [answered, setAnswered]   = useState(false);
   const [score, setScore]         = useState(0);
   const [done, setDone]           = useState(false);
 
-  const q = questions[current];
   const LETTERS = ['A', 'B', 'C', 'D'];
+
+  async function handleStart() {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const aiQuestions = await generateQuiz(topic.title, topic.subject, "No notes context needed. Generate based on topic.", level);
+      setQuestions(aiQuestions);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   function handleSelect(idx) {
     if (answered) return;
     setSelected(idx);
     setAnswered(true);
+    const q = questions[current];
     if (idx === q.correctIndex) setScore(s => s + 1);
   }
 
@@ -98,24 +85,59 @@ function QuizSection({ questions, onComplete }) {
       setAnswered(false);
     } else {
       setDone(true);
-      onComplete(score + (selected === q.correctIndex ? 1 : 0));
+      const q = questions[current];
+      const finalScore = score + (selected === q.correctIndex ? 1 : 0);
+      onComplete(finalScore, questions.length);
     }
   }
 
-  function handleRetry() {
-    setCurrent(0);
-    setSelected(null);
-    setAnswered(false);
-    setScore(0);
-    setDone(false);
+  // State 1: Before AI generation
+  if (questions.length === 0) {
+    return (
+      <div className="glass-card quiz-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+        <button onClick={onBack} className="btn btn-ghost" style={{ position: 'absolute', top: '16px', left: '16px', padding: '8px' }}>
+          <FiArrowLeft /> Back
+        </button>
+        <FiZap size={48} color="var(--color-accent)" style={{ marginBottom: '16px', marginTop: '20px' }} />
+        <h2>Level {level} Quiz</h2>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
+          You must score at least 80% to unlock the next level of mastery.
+        </p>
+        
+        {error && (
+          <div className="note-highlight" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#EF4444', borderLeftColor: '#EF4444', marginBottom: '24px', textAlign: 'left' }}>
+            <strong>Error:</strong> {error}
+          </div>
+        )}
+        
+        <button 
+          className="btn btn-primary" 
+          onClick={handleStart} 
+          disabled={isLoading}
+          style={{ width: '100%', justifyContent: 'center', maxWidth: '300px', margin: '0 auto' }}
+        >
+          {isLoading ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="loader-spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} /> 
+              Generating Quiz...
+            </span>
+          ) : (
+             <><FiPlay /> Start Quiz</>
+          )}
+        </button>
+      </div>
+    );
   }
 
+  const q = questions[current];
   const finalScore = score + (done && selected === q?.correctIndex ? 0 : 0);
   const pct = Math.round((finalScore / questions.length) * 100);
 
+  // State 2: Quiz Finished
   if (done) {
     const total = questions.length;
-    const emoji = finalScore === total ? '🎉' : finalScore >= total / 2 ? '👍' : '📚';
+    const passed = pct >= 80;
+    const emoji = passed ? '🎉' : '📚';
     return (
       <div className="glass-card score-screen">
         <div className="score-ring-wrap" aria-label={`Score: ${finalScore} out of ${total}`}>
@@ -124,27 +146,30 @@ function QuizSection({ questions, onComplete }) {
             <div className="score-label">correct</div>
           </div>
         </div>
-        <h2>{emoji} {finalScore === total ? 'Perfect!' : finalScore >= total / 2 ? 'Good Job!' : 'Keep Practicing'}</h2>
+        <h2>{emoji} {passed ? 'Level Passed!' : 'Keep Practicing'}</h2>
         <p>
           You scored <strong style={{ color: 'var(--color-primary-light)' }}>
             {pct}%
-          </strong> on this topic.
-          {finalScore < total && ' Review the notes and try again!'}
+          </strong>.
+          {passed ? " You have unlocked the next tier of mastery." : " You need at least 80% to level up. Review the study guide and try again!"}
         </p>
-        <div className="score-actions">
-          <button className="btn btn-ghost" onClick={handleRetry} id="quiz-retry-btn">
-            <FiRotateCcw /> Retry Quiz
+        <div className="score-actions" style={{ marginTop: '24px' }}>
+          <button className="btn btn-primary" onClick={onBack}>
+            Return to Path
           </button>
         </div>
       </div>
     );
   }
 
+  // State 3: Quiz Active
   return (
     <section className="quiz-section" aria-labelledby="quiz-heading">
       <div className="quiz-header">
-        <FiZap color="var(--color-accent)" />
-        <h3 id="quiz-heading">Practice Questions</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <FiZap color="var(--color-accent)" />
+          <h3 id="quiz-heading">Level {level} Practice</h3>
+        </div>
         <span className="quiz-q-count">
           {current + 1} / {questions.length}
         </span>
@@ -165,7 +190,6 @@ function QuizSection({ questions, onComplete }) {
                 className={cls}
                 onClick={() => handleSelect(idx)}
                 disabled={answered}
-                id={`quiz-opt-${current}-${idx}`}
                 aria-pressed={selected === idx}
               >
                 <span className="quiz-option-letter">{LETTERS[idx]}</span>
@@ -176,21 +200,19 @@ function QuizSection({ questions, onComplete }) {
         </div>
 
         {answered && (
-          <>
-            <div className="quiz-explanation">
+          <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '24px' }}>
+            <div className="quiz-explanation" style={{ marginBottom: '24px' }}>
               <strong>Explanation:</strong> {q.explanation}
             </div>
-            <div style={{ marginTop: '16px' }}>
-              <button
-                className="btn btn-primary"
-                onClick={handleNext}
-                id={`quiz-next-${current}`}
-              >
-                {current + 1 < questions.length ? 'Next Question' : 'See Results'}{' '}
-                <FiChevronRight />
-              </button>
-            </div>
-          </>
+            <button
+              className="btn btn-primary"
+              onClick={handleNext}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              {current + 1 < questions.length ? 'Next Question' : 'See Results'}{' '}
+              <FiChevronRight />
+            </button>
+          </div>
         )}
       </div>
     </section>
@@ -199,22 +221,24 @@ function QuizSection({ questions, onComplete }) {
 
 /* ── Main StudyPage ──────────────────────────── */
 export default function StudyPage() {
-  const [activeTopic, setActiveTopic] = useState(topics.length > 0 ? topics[0] : null);
-  const [noteIndex, setNoteIndex]     = useState(0);
-  const [showQuiz, setShowQuiz]       = useState(false);
-  const [completed, setCompleted]     = useState({}); // topicId → score
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const subjectFilter = queryParams.get('subject');
+
+  const [activeTopic, setActiveTopic] = useState(null);
+  const [viewState, setViewState] = useState('path'); // 'path', 'notes', 'quiz'
+  const [activeLevel, setActiveLevel] = useState(1);
+  
+  // Dynamic notes state
+  const [notesContent, setNotesContent] = useState('');
+  const [isGeneratingNotes, setIsGeneratingNotes] = useState(false);
+  const [notesError, setNotesError] = useState(null);
 
   // ── Debounced search ──────────────────────────
-  // `searchRaw` updates on every keystroke (controls the input).
-  // `searchQuery` only updates 350 ms after the user stops typing.
-  // The topic filter runs against `searchQuery` — not every raw keystroke.
-  const [searchRaw,   setSearchRaw]   = useState('');
+  const [searchRaw, setSearchRaw] = useState('');
   const searchQuery = useDebounce(searchRaw, 350);
 
   // ── Throttled Scroll Progress ───────────────────
-  // We track how far down the user has scrolled to show a reading progress bar.
-  // We don't want to re-render the React component on EVERY pixel scrolled (60+ times/sec),
-  // so we throttle the update to at most once every 100ms.
   const [scrollRaw, setScrollRaw] = useState(0);
   const scrollThrottled = useThrottle(scrollRaw, 100);
   const contentRef = useRef(null);
@@ -227,206 +251,300 @@ export default function StudyPage() {
       const percentage = maxScroll > 0 ? (scrollTop / maxScroll) * 100 : 0;
       setScrollRaw(percentage);
     };
-
     const el = contentRef.current;
     if (el) el.addEventListener('scroll', handleScroll);
     return () => { if (el) el.removeEventListener('scroll', handleScroll); };
-  }, [activeTopic]);
+  }, [viewState]);
 
-  const filteredTopics = topics.filter(t =>
+  let filteredTopics = topics.filter(t =>
     t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.subject.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  if (subjectFilter) {
+    filteredTopics = filteredTopics.filter(t => t.subject === subjectFilter);
+  }
+
+  const groupedTopics = filteredTopics.reduce((acc, topic) => {
+    if (!acc[topic.subject]) acc[topic.subject] = [];
+    acc[topic.subject].push(topic);
+    return acc;
+  }, {});
+
+  function selectTopic(topic) {
+    setActiveTopic(topic);
+    setViewState('path');
+    setNotesContent('');
+  }
+
+  // Auto-select first topic on initial load or filter change
+  useEffect(() => {
+    if (filteredTopics.length > 0) {
+      if (!activeTopic || (subjectFilter && activeTopic.subject !== subjectFilter)) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        selectTopic(filteredTopics[0]);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectFilter, activeTopic]);
+
+  // Hook for the currently active topic
+  const { mastery, updateMastery, resetMastery } = useMastery(activeTopic?.id || 'default');
+
+  async function handleOpenLevel(level, forceRegenerate = false) {
+    setActiveLevel(level);
+    setViewState('notes');
+    
+    // Check cache first if not explicitly regenerating
+    if (!forceRegenerate) {
+      const cacheKey = `snapstudy_notes_${activeTopic.id}_lvl${level}`;
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        setNotesContent(cached);
+        return; // Skip API call
+      }
+    }
+
+    setNotesContent('');
+    setIsGeneratingNotes(true);
+    setNotesError(null);
+    try {
+      const content = await generateStudyNotes(activeTopic.title, activeTopic.subject, level);
+      
+      // Save to cache
+      localStorage.setItem(`snapstudy_notes_${activeTopic.id}_lvl${level}`, content);
+      
+      setNotesContent(content);
+    } catch (err) {
+      setNotesError(err.message);
+    } finally {
+      setIsGeneratingNotes(false);
+    }
+  }
+
+  function handleQuizComplete(score, total) {
+    const pct = score / total;
+    if (pct >= 0.8 && activeLevel === mastery && mastery < 5) {
+      // Force update mastery to current level + 1 if they just beat their highest level
+      // The hook does Math.min(5, prev+1), but since we strictly gate, it works out.
+      updateMastery(total, total); // Simulate perfect score to force level up in the hook
+    }
+  }
+
   if (!activeTopic) {
     return (
       <div className="study-layout">
-        <SEO 
-          title="Study" 
-          description="Read bite-sized study notes and practice with MCQs." 
-          path="/study" 
-        />
-        <aside className="study-sidebar" aria-label="Topic list">
-          <div className="sidebar-topics-header">
-            <h2>Topics</h2>
-          </div>
-          <p className="sidebar-no-results">No topics added yet.</p>
+        <SEO title="Study" description="Adaptive AI Learning" path="/study" />
+        <aside className="study-sidebar">
+          <div className="sidebar-topics-header"><h2>Topics</h2></div>
+          <p className="sidebar-no-results">No topics available.</p>
         </aside>
-        <div className="study-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center' }}>
-            <h2 style={{ marginBottom: '12px' }}>Ready for Content</h2>
-            <p style={{ color: 'var(--text-muted)' }}>
-              Add your syllabus content to <code>src/data/topics.js</code> to get started.
-            </p>
-          </div>
-        </div>
+        <div className="study-content">Select a topic.</div>
       </div>
     );
   }
 
-  const notes     = activeTopic.notes;
-  const questions = activeTopic.questions;
-  const totalSteps = notes.length + 1; // +1 for quiz phase
-  const currentStep = showQuiz ? totalSteps : noteIndex + 1;
-  const progressPct = Math.round((currentStep / totalSteps) * 100);
-
-  function selectTopic(topic) {
-    setActiveTopic(topic);
-    setNoteIndex(0);
-    setShowQuiz(false);
-  }
-
-  function handleContinueNote() {
-    if (noteIndex + 1 < notes.length) {
-      setNoteIndex(n => n + 1);
-    } else {
-      setShowQuiz(true);
-    }
-  }
-
-  function handleQuizComplete(score) {
-    setCompleted(prev => ({
-      ...prev,
-      [activeTopic.id]: score,
-    }));
-  }
+  const levelTitles = [
+    "Beginner", "Novice", "Intermediate", "Advanced", "Elite Master"
+  ];
 
   return (
     <div className="study-layout">
       <SEO 
         title={activeTopic.title} 
-        description={`Study notes and MCQs for ${activeTopic.title} (${activeTopic.subject}).`} 
+        description={`Study notes and AI Quizzes for ${activeTopic.title}.`} 
         path={`/study`} 
       />
       {/* ── Sidebar ── */}
       <aside className="study-sidebar" aria-label="Topic list">
-        {/* Debounced search input */}
         <div className="sidebar-search-wrap">
           <FiSearch className="sidebar-search-icon" aria-hidden="true" />
           <input
-            id="topic-search-input"
             className="sidebar-search-input"
             type="search"
             placeholder="Search topics…"
             value={searchRaw}
             onChange={e => setSearchRaw(e.target.value)}
-            aria-label="Search topics"
-            autoComplete="off"
           />
-          {/* Typing indicator — shows while debounce is pending */}
-          {searchRaw !== searchQuery && (
-            <span className="sidebar-search-typing" aria-hidden="true" title="Filtering…">⏳</span>
-          )}
         </div>
 
-        <div className="sidebar-topics-header">
-          <h2>Topics</h2>
-          {searchQuery && (
-            <span className="sidebar-result-count" aria-live="polite">
-              {filteredTopics.length} result{filteredTopics.length !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-
-        {filteredTopics.length === 0 ? (
-          <p className="sidebar-no-results">No topics match &ldquo;{searchQuery}&rdquo;</p>
-        ) : (
-          <ul className="topic-list" role="list">
-            {filteredTopics.map(topic => (
-              <li key={topic.id}>
-                <button
-                  className={`topic-btn${activeTopic.id === topic.id ? ' active' : ''}`}
-                  onClick={() => selectTopic(topic)}
-                  id={`topic-btn-${topic.id}`}
-                  aria-current={activeTopic.id === topic.id ? 'true' : undefined}
-                >
-                  <span className="topic-btn-icon">{topic.icon}</span>
-                  <span>{topic.title}</span>
-                  <span className="topic-btn-meta">
-                    {completed[topic.id] !== undefined && (
-                      <FiCheckCircle className="topic-check" aria-label="Completed" />
-                    )}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+        {subjectFilter && (
+          <div style={{ marginTop: '16px', marginBottom: '8px' }}>
+            <Link to="/study" className="btn btn-ghost" style={{ fontSize: '0.85rem', padding: '8px', width: '100%', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#EF4444' }}>
+              <FiRotateCcw style={{ marginRight: '6px' }} /> Clear Subject Filter
+            </Link>
+          </div>
         )}
+
+        <div className="topic-list-container" style={{ marginTop: '16px' }}>
+          {Object.keys(groupedTopics).map(subjectName => (
+            <div key={subjectName} className="sidebar-subject-group" style={{ marginBottom: '24px' }}>
+              <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', marginBottom: '8px', paddingLeft: '8px' }}>
+                {subjectName}
+              </h4>
+              <ul className="topic-list" role="list">
+                {groupedTopics[subjectName].map(topic => (
+                  <li key={topic.id}>
+                    <button
+                      className={`topic-btn${activeTopic?.id === topic.id ? ' active' : ''}`}
+                      onClick={() => selectTopic(topic)}
+                    >
+                      <span className="topic-btn-icon">{topic.icon}</span>
+                      <span>{topic.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       </aside>
 
       {/* ── Content ── */}
       <div className="study-content" ref={contentRef} style={{ overflowY: 'auto', height: 'calc(100vh - var(--nav-height))' }}>
-        {/* Throttled Reading Progress Bar */}
-        <div 
-          style={{
-            position: 'sticky', top: 0, left: 0, right: 0, height: '3px', 
-            background: 'var(--bg-surface)', zIndex: 10, marginBottom: '20px'
-          }}
-        >
-          <div 
-            style={{ 
-              height: '100%', width: `${scrollThrottled}%`, 
-              background: 'var(--color-primary-light)', transition: 'width 0.1s linear' 
-            }} 
-          />
-        </div>
+        
+        {viewState === 'notes' && (
+          <div style={{ position: 'sticky', top: 0, left: 0, right: 0, height: '3px', background: 'var(--bg-surface)', zIndex: 10, marginBottom: '20px' }}>
+            <div style={{ height: '100%', width: `${scrollThrottled}%`, background: 'var(--color-primary-light)', transition: 'width 0.1s linear' }} />
+          </div>
+        )}
 
-        {/* Topic header */}
         <header className="study-topic-header">
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span className="badge badge-primary">{activeTopic.subject}</span>
-            <span className="badge" style={{
-              background: 'rgba(245,158,11,0.12)',
-              color: '#FCD34D',
-              border: '1px solid rgba(245,158,11,0.3)',
-            }}>
-              {activeTopic.difficulty}
+            <span className="badge" style={{ background: 'rgba(245,158,11,0.12)', color: '#FCD34D', border: '1px solid rgba(245,158,11,0.3)' }}>
+              Mastery: {mastery}/5
             </span>
           </div>
-          <h1 id="study-topic-heading">
-            {activeTopic.icon} {activeTopic.title}
-          </h1>
-          <div className="study-meta">
-            <FiClock size={13} />
-            <span>~{activeTopic.estimatedMins} min read + quiz</span>
-            <span>·</span>
-            <span>{questions.length} questions</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <h1 id="study-topic-heading">
+              {activeTopic.icon} {activeTopic.title}
+            </h1>
+            {mastery > 1 && viewState === 'path' && (
+              <button 
+                onClick={() => {
+                  if (window.confirm("Are you sure you want to completely reset your progress for this topic? You will lose access to higher level notes until you pass the quizzes again.")) {
+                    resetMastery();
+                  }
+                }}
+                className="btn btn-ghost" 
+                style={{ color: '#EF4444', borderColor: 'rgba(239, 68, 68, 0.2)', marginTop: '16px' }}
+                title="Reset progress to Level 1"
+              >
+                <FiRotateCcw /> Reset Progress
+              </button>
+            )}
           </div>
         </header>
 
-        {/* Progress bar */}
-        <div className="study-progress-wrap" aria-label="Study progress">
-          <div className="study-progress-label">
-            <span>{showQuiz ? 'Practice Questions' : `Section ${noteIndex + 1} of ${notes.length}`}</span>
-            <span>{progressPct}%</span>
+        {/* ── VIEW: Path to Mastery ── */}
+        {viewState === 'path' && (
+          <div className="path-container" style={{ padding: '20px 0' }}>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>
+              Select a tier below. You must pass the AI quiz at the end of each study guide to unlock the next level of mastery.
+            </p>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {[1, 2, 3, 4, 5].map((level, i) => {
+                const isUnlocked = level <= mastery;
+                const isCurrent = level === mastery;
+                
+                return (
+                  <div 
+                    key={level}
+                    className={`glass-card ${!isUnlocked ? 'locked' : ''}`}
+                    style={{ 
+                      padding: '24px', 
+                      display: 'flex', 
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      border: isCurrent ? '2px solid var(--color-primary)' : '1px solid rgba(255,255,255,0.1)',
+                      opacity: isUnlocked ? 1 : 0.5,
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div>
+                      <h3 style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                        {isUnlocked ? <FiUnlock color="var(--color-success)" /> : <FiLock color="var(--text-muted)" />}
+                        Level {level}: {levelTitles[i]}
+                      </h3>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
+                        {isUnlocked ? "Study the AI-generated guide and take the quiz." : "Locked. Pass previous level to access."}
+                      </p>
+                    </div>
+                    <button 
+                      className={`btn ${isCurrent ? 'btn-primary' : 'btn-ghost'}`}
+                      disabled={!isUnlocked}
+                      onClick={() => handleOpenLevel(level)}
+                    >
+                      <FiBookOpen /> {isUnlocked ? 'Read Guide' : 'Locked'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div className="study-progress-track">
-            <div
-              className="study-progress-fill"
-              style={{ width: `${progressPct}%` }}
-              role="progressbar"
-              aria-valuenow={progressPct}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            />
-          </div>
-        </div>
+        )}
 
-        {/* Notes OR Quiz */}
-        {!showQuiz ? (
-          <NoteCard
-            key={`${activeTopic.id}-${noteIndex}`}
-            note={notes[noteIndex]}
-            onContinue={handleContinueNote}
-            isLast={noteIndex === notes.length - 1}
-          />
-        ) : (
-          <QuizSection
-            key={activeTopic.id}
-            questions={questions}
-            onComplete={handleQuizComplete}
+        {/* ── VIEW: AI Notes ── */}
+        {viewState === 'notes' && (
+          <div className="notes-container" style={{ paddingBottom: '80px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
+              <button onClick={() => setViewState('path')} className="btn btn-ghost" style={{ padding: '8px' }}>
+                <FiArrowLeft /> Back to Path
+              </button>
+              <button 
+                onClick={() => handleOpenLevel(activeLevel, true)} 
+                className="btn btn-ghost" 
+                style={{ padding: '8px' }} 
+                disabled={isGeneratingNotes}
+              >
+                <FiRotateCcw /> Regenerate Guide
+              </button>
+            </div>
+            
+            <div className="glass-card" style={{ padding: '40px' }}>
+              {isGeneratingNotes ? (
+                <div style={{ textAlign: 'center', padding: '60px 0' }}>
+                  <div className="loader-spinner" style={{ width: '48px', height: '48px', margin: '0 auto 24px auto', borderColor: 'rgba(255,255,255,0.1)', borderTopColor: 'var(--color-primary-light)' }} />
+                  <h3>Generating Level {activeLevel} Study Guide...</h3>
+                  <p style={{ color: 'var(--text-muted)' }}>The AI is writing a highly detailed, 1000+ word explanation tailored to your skill level.</p>
+                </div>
+              ) : notesError ? (
+                <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#EF4444', padding: '16px', borderRadius: '8px' }}>
+                  <strong>Error:</strong> {notesError}
+                  <br /><br />
+                  <button className="btn btn-primary" onClick={() => handleOpenLevel(activeLevel)}>Try Again</button>
+                </div>
+              ) : (
+                <>
+                  <MarkdownRenderer content={notesContent} />
+                  
+                  <div style={{ marginTop: '48px', paddingTop: '32px', borderTop: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
+                    <h2>Ready to Test Your Knowledge?</h2>
+                    <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
+                      Pass the quiz with an 80% or higher to {activeLevel === 5 ? "complete this topic" : "unlock the next mastery level"}.
+                    </p>
+                    <button className="btn btn-primary" onClick={() => setViewState('quiz')} style={{ fontSize: '1.1rem', padding: '16px 32px' }}>
+                      <FiZap /> Take Level {activeLevel} Quiz
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── VIEW: Quiz ── */}
+        {viewState === 'quiz' && (
+          <QuizSection 
+            topic={activeTopic} 
+            level={activeLevel} 
+            onComplete={handleQuizComplete} 
+            onBack={() => setViewState('path')}
           />
         )}
+
       </div>
     </div>
   );

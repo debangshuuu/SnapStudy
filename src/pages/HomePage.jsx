@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import {
   FiBook, FiZap, FiCheckCircle,
-  FiArrowRight, FiStar, FiClock, FiTarget,
+  FiArrowRight, FiTarget,
 } from 'react-icons/fi';
 import SEO from '../components/seo/SEO';
 import './HomePage.css';

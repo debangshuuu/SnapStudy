@@ -1,9 +1,5 @@
 import { Link } from 'react-router-dom';
-import {
-  FiBook, FiZap, FiBarChart2, FiGrid,
-  FiGithub, FiTwitter, FiInstagram,
-  FiArrowRight,
-} from 'react-icons/fi';
+import { FiGithub, FiTwitter, FiInstagram, FiArrowRight } from 'react-icons/fi';
 import './Footer.css';
 
 const PLATFORM_LINKS = [

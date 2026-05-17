@@ -10,10 +10,13 @@ import { useState, useEffect, useRef } from 'react';
  */
 export function useThrottle(value, limit = 200) {
   const [throttledValue, setThrottledValue] = useState(value);
-  const lastUpdated = useRef(Date.now());
+  const lastUpdated = useRef(null);
 
   useEffect(() => {
     const now = Date.now();
+    if (lastUpdated.current === null) {
+      lastUpdated.current = now;
+    }
     
     // If enough time has passed, update immediately
     if (now - lastUpdated.current >= limit) {
