@@ -1,9 +1,24 @@
 const providers = [
   {
-    name: "gemini",
+    name: "gemini-2.5-flash",
     key: import.meta.env.VITE_GEMINI_API_KEY,
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     model: "gemini-2.5-flash",
+    headers: (key) => ({
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`
+    }),
+    body: (model, prompt) => ({
+      model: model,
+      messages: [{ role: "user", content: prompt }]
+    }),
+    extract: (data) => data.choices?.[0]?.message?.content
+  },
+  {
+    name: "gemini-1.5-flash",
+    key: import.meta.env.VITE_GEMINI_API_KEY,
+    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    model: "gemini-1.5-flash",
     headers: (key) => ({
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`
