@@ -1,9 +1,79 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+const providers = [
+  {
+    name: "gemini",
+    key: import.meta.env.VITE_GEMINI_API_KEY,
+    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    model: "gemini-2.5-flash",
+    headers: (key) => ({
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`
+    }),
+    body: (model, prompt) => ({
+      model: model,
+      messages: [{ role: "user", content: prompt }]
+    }),
+    extract: (data) => data.choices?.[0]?.message?.content
+  },
+  {
+    name: "openai",
+    key: import.meta.env.VITE_OPENAI_KEY_1 || import.meta.env.VITE_OPENAI_API_KEY,
+    url: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-4.1-mini",
+    headers: (key) => ({
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`
+    }),
+    body: (model, prompt) => ({
+      model: model,
+      messages: [{ role: "user", content: prompt }]
+    }),
+    extract: (data) => data.choices?.[0]?.message?.content
+  }
+];
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+/**
+ * Helper to call AI completion with fallback across multiple providers.
+ * 
+ * @param {string} prompt - The prompt to send to the AI
+ * @returns {Promise<string>} - The generated text response
+ */
+async function callAIWithFallback(prompt) {
+  const activeProviders = providers.filter(p => p.key);
 
-// Initialize the API only if the key exists to prevent crashing the whole app
-const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
+  if (activeProviders.length === 0) {
+    throw new Error("No AI API keys configured. Please add VITE_GEMINI_API_KEY or VITE_OPENAI_KEY_1 to your .env file.");
+  }
+
+  let lastError = null;
+
+  for (const provider of activeProviders) {
+    try {
+      console.log(`Attempting generation with ${provider.name} (${provider.model})...`);
+      const response = await fetch(provider.url, {
+        method: "POST",
+        headers: provider.headers(provider.key),
+        body: JSON.stringify(provider.body(provider.model, prompt))
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json();
+      const content = provider.extract(data);
+      if (!content) {
+        throw new Error("Invalid response structure (missing content)");
+      }
+      return content;
+    } catch (err) {
+      console.warn(`Provider ${provider.name} failed:`, err.message);
+      lastError = err;
+    }
+  }
+
+  throw new Error(`All configured AI providers failed. Last error: ${lastError?.message || "unknown"}`);
+}
 
 /**
  * Generates a dynamic quiz for a specific topic based on the user's mastery level.
@@ -15,18 +85,6 @@ const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
  * @returns {Promise<Array>} - An array of question objects
  */
 export async function generateQuiz(topicTitle, subjectName, topicNotes, masteryLevel) {
-  if (!genAI) {
-    throw new Error("Missing VITE_GEMINI_API_KEY in .env file. Please add your API key to generate quizzes.");
-  }
-
-  // We use gemini-2.5-flash as it is the standard available model
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
-    generationConfig: {
-      temperature: 0.7,
-    }
-  });
-
   // Adjust difficulty prompt based on mastery level
   let difficultyDescription;
   if (masteryLevel <= 2) {
@@ -67,13 +125,12 @@ export async function generateQuiz(topicTitle, subjectName, topicNotes, masteryL
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    let responseText = result.response.text();
+    const responseText = await callAIWithFallback(prompt);
     
     // Sanitize the response just in case the AI wraps it in markdown despite instructions
-    responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const cleanResponseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
     
-    const questions = JSON.parse(responseText);
+    const questions = JSON.parse(cleanResponseText);
     
     if (!Array.isArray(questions)) {
       throw new Error("AI did not return a valid array of questions.");
@@ -101,17 +158,6 @@ export async function generateQuiz(topicTitle, subjectName, topicNotes, masteryL
  * @returns {Promise<string>} - A markdown string containing the study notes
  */
 export async function generateStudyNotes(topicTitle, subjectName, masteryLevel) {
-  if (!genAI) {
-    throw new Error("Missing VITE_GEMINI_API_KEY in .env file.");
-  }
-
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
-    generationConfig: {
-      temperature: 0.7,
-    }
-  });
-
   let levelInstructions;
   switch(masteryLevel) {
     case 1:
@@ -147,8 +193,7 @@ export async function generateStudyNotes(topicTitle, subjectName, masteryLevel) 
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    return result.response.text();
+    return await callAIWithFallback(prompt);
   } catch (error) {
     console.error("Failed to generate notes:", error);
     throw new Error(`AI Error: ${error.message}`, { cause: error });
